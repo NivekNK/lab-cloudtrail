@@ -2,3 +2,4 @@
 .env
 cloudtrail.zip
 cloudtrail_response.json
+queries.md
