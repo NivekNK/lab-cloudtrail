@@ -372,7 +372,7 @@ SELECT
     s.source,
     i.type AS identity_type,
     i.user_name,
-    i.invoked_by,
+    inv.invoker as invoked_by,
     iss.user_name AS assumed_role,
     ua.agent,
     e.source_ip,
@@ -383,9 +383,10 @@ JOIN event_sources s ON e.source_id = s.id
 JOIN identities i ON e.identity_id = i.id
 LEFT JOIN issuers iss ON e.issuer_id = iss.id
 LEFT JOIN user_agents ua ON e.user_agent_id = ua.id
+LEFT JOIN invocation_sources inv ON i.invoker_id = inv.id
 WHERE e.event_time > NOW() - INTERVAL 24 HOUR
   AND i.type != 'IAMUser'
-  AND (i.invoked_by IS NOT NULL OR iss.user_name LIKE '%Service%')
+  AND (inv.invoker IS NOT NULL OR iss.user_name LIKE '%Service%')
 ORDER BY RAND()
 LIMIT 5;
 ```
@@ -1276,17 +1277,18 @@ SELECT
     e.request_parametrs->>"$.QueueUrl" AS queue_url,
     e.request_parameters->>"$.TopicArn" AS topic_arn,
     e.request_parameters->>"$.Message" AS message_sample,
-    i.invoked_by
+    inv.invoker as invoked_by
 FROM events e
 JOIN event_sources s ON e.source_id = s.id
 JOIN event_names n ON e.event_name_id = n.id
 JOIN identities i ON e.identity_id = i.id
+LEFT JOIN invocation_sources inv ON i.invoker_id = inv.id
 WHERE s.source IN ('sqs.amazonaws.com', 'sns.amazonaws.com')
 GROUP BY s.source, n.name,
          e.request_parameters->>"$.QueueUrl",
          e.request_parameters->>"$.TopicArn",
          e.request_parameters->>"$.Message",
-         i.invoked_by
+         inv.invoker
 ORDER BY s.source, frecuencia DESC
 LIMIT 20;
 ```
