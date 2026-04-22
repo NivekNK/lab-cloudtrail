@@ -1,0 +1,73 @@
+{
+  "Events": [
+    {
+      "EventId": "a4bc9d0f-e5e8-4b02-af2c-2886997b6f7e",
+      "EventName": "DescribeInstanceStatus",
+      "ReadOnly": "true",
+      "AccessKeyId": "ASIA6NVW7XE7ZIHFQOSP",
+      "EventTime": 1776789005,
+      "EventSource": "ec2.amazonaws.com",
+      "Username": "AutoScaling",
+      "Resources": [],
+      "CloudTrailEvent": {
+        "eventVersion": "1.11",
+        "userIdentity": {
+          "type": "AssumedRole",
+          "principalId": "AROA6NVW7XE743JRJFCRC:AutoScaling",
+          "arn": "arn:aws:sts::991447464255:assumed-role/AWSServiceRoleForAutoScaling/AutoScaling",
+          "accountId": "991447464255",
+          "accessKeyId": "ASIA6NVW7XE7ZIHFQOSP",
+          "sessionContext": {
+            "sessionIssuer": {
+              "type": "Role",
+              "principalId": "AROA6NVW7XE743JRJFCRC",
+              "arn": "arn:aws:iam::991447464255:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+              "accountId": "991447464255",
+              "userName": "AWSServiceRoleForAutoScaling"
+            },
+            "attributes": {
+              "creationDate": "2026-04-21T16:13:58Z",
+              "mfaAuthenticated": "false"
+            }
+          },
+          "invokedBy": "autoscaling.amazonaws.com"
+        },
+        "eventTime": "2026-04-21T16:30:05Z",
+        "eventSource": "ec2.amazonaws.com",
+        "eventName": "DescribeInstanceStatus",
+        "awsRegion": "ca-central-1",
+        "sourceIPAddress": "autoscaling.amazonaws.com",
+        "userAgent": "autoscaling.amazonaws.com",
+        "requestParameters": {
+          "instancesSet": {
+            "items": [
+              {
+                "instanceId": "i-0a96854540c2f09b5"
+              },
+              {
+                "instanceId": "i-0a2369400fd1a7517"
+              },
+              {
+                "instanceId": "i-0960a2bca0058985f"
+              },
+              {
+                "instanceId": "i-0e0aa1253405a8b82"
+              }
+            ]
+          },
+          "filterSet": {},
+          "includeAllInstances": true
+        },
+        "responseElements": null,
+        "requestID": "f7e76ca0-68f1-47c1-bf5f-d96c560f5407",
+        "eventID": "a4bc9d0f-e5e8-4b02-af2c-2886997b6f7e",
+        "readOnly": true,
+        "eventType": "AwsApiCall",
+        "managementEvent": true,
+        "recipientAccountId": "991447464255",
+        "eventCategory": "Management"
+      }
+    }
+  ],
+  "NextToken": "eyJOZXh0VG9rZW4iOiBudWxsLCAiYm90b190cnVuY2F0ZV9hbW91bnQiOiAxfQ=="
+}
