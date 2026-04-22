@@ -17,14 +17,18 @@
           pkgs.awscli2
         ];
 
-        shellHook = ''
+		shellHook = ''
           echo "--- Entorno CloudTrail Normalizado ---"
           if [ ! -d ".venv" ]; then
             echo "Creando entorno virtual con uv..."
             uv venv
-            uv pip install boto3 mysql-connector-python
           fi
           source .venv/bin/activate
+          
+          # Añadimos la nueva dependencia aquí
+          echo "Sincronizando dependencias..."
+          uv pip install boto3 mysql-connector-python python-dotenv
+          
           echo "Listo: Usa 'python ingest_cloudtrail.py --days X'"
         '';
       };
