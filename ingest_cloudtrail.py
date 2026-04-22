@@ -84,28 +84,27 @@ def managed_db_connection(db_config):
     """Context manager para conexion con reintentos"""
     conn = None
     max_retries = 3
-
-    for attempt in range(max_retries):
-        try:
-            cfg = db_config.copy()
-            db_name = cfg.pop('database')
-            conn = mysql.connector.connect(**cfg)
-            cursor = conn.cursor(buffered=True)
-            cursor.execute(f"USE {db_name}")
-            cursor.execute("SET time_zone = '+00:00'")
-            cursor.execute("SET SESSION sql_mode = 'ALLOW_INVALID_DATES'")
-            yield conn, cursor
-            break
-        except MySQLError as e:
-            logger.error(f"Intento {attempt + 1}/{max_retries} fallido: {e}")
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(2 ** attempt)
-        finally:
-            if conn and conn.is_connected():
-                conn.close()
-                logger.debug("Conexion cerrada")
-
+    try:
+        for attempt in range(max_retries):
+            try:
+                cfg = db_config.copy()
+                db_name = cfg.pop('database')
+                conn = mysql.connector.connect(**cfg)
+                cursor = conn.cursor(buffered=True)
+                cursor.execute(f"USE {db_name}")
+                cursor.execute("SET time_zone = '+00:00'")
+                cursor.execute("SET SESSION sql_mode = 'ALLOW_INVALID_DATES'")
+                yield conn, cursor
+                return  # Salida exitosa del generador
+            except MySQLError as e:
+                logger.error(f"Intento {attempt + 1}/{max_retries} fallido: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
+            logger.debug("Conexion cerrada")
 
 def manage_partitions(cursor, db_name, table, target_date):
     """Estrategia REORGANIZE para permitir ingestas en cualquier orden cronologico"""
@@ -216,41 +215,58 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
     batch_insert_resources = []
     count = 0
 
-    try:
-        pages = paginator.paginate(StartTime=start_dt, EndTime=end_dt, PaginationConfig=config)
-        for page in pages:
-            for event in page['Events']:
-                try:
-                    ct = json.loads(event.get('CloudTrailEvent') or '{}')
+    for page in paginator.paginate(StartTime=start_dt, EndTime=end_dt, PaginationConfig=config):
+        for event in page['Events']:
+            try:
+                ct = json.loads(event.get('CloudTrailEvent') or '{}')
 
-                    # Validacion
-                    valid, error = validate_event(event, ct)
-                    if not valid:
-                        logger.debug(f"Evento invalido: {error}")
-                        metrics.events_skipped += 1
-                        continue
+                # Validacion
+                valid, error = validate_event(event, ct)
+                if not valid:
+                    logger.debug(f"Evento invalido: {error}")
+                    metrics.events_skipped += 1
+                    continue
 
-                    # Limpieza de fechas
-                    event_time_obj = event.get('EventTime')
-                    clean_time = str(ct.get('eventTime') or event_time_obj).replace('T', ' ').replace('Z', '')
-                    epoch_time = int(event_time_obj.timestamp()) if isinstance(event_time_obj, datetime) else None
+                # Limpieza de fechas
+                event_time_obj = event.get('EventTime')
+                clean_time = str(ct.get('eventTime') or event_time_obj).replace('T', ' ').replace('Z', '')
+                epoch_time = int(event_time_obj.timestamp()) if isinstance(event_time_obj, datetime) else None
 
-                    # Normalizacion de Maestros
-                    name_id = get_id(cursor, 'event_names', 'name', event.get('EventName'))
-                    source_id = get_id(cursor, 'event_sources', 'source', event.get('EventSource'))
-                    region_id = get_id(cursor, 'regions', 'name', ct.get('awsRegion'))
-                    agent_id = get_id(cursor, 'user_agents', 'agent', ct.get('userAgent'))
-                    error_id = get_id(cursor, 'error_codes', 'code', ct.get('errorCode'))
-                    type_id = get_id(cursor, 'event_types', 'name', ct.get('eventType'))
-                    cat_id = get_id(cursor, 'event_categories', 'name', ct.get('eventCategory'))
+                # Normalizacion de Maestros
+                name_id = get_id(cursor, 'event_names', 'name', event.get('EventName'))
+                source_id = get_id(cursor, 'event_sources', 'source', event.get('EventSource'))
+                region_id = get_id(cursor, 'regions', 'name', ct.get('awsRegion'))
+                agent_id = get_id(cursor, 'user_agents', 'agent', ct.get('userAgent'))
+                error_id = get_id(cursor, 'error_codes', 'code', ct.get('errorCode'))
+                type_id = get_id(cursor, 'event_types', 'name', ct.get('eventType'))
+                cat_id = get_id(cursor, 'event_categories', 'name', ct.get('eventCategory'))
 
-                    ui_raw = ct.get('userIdentity') or {}
-                    invoker_id = get_id(cursor, 'invocation_sources', 'invoker', ui_raw.get('invokedBy'))
+                ui_raw = ct.get('userIdentity') or {}
+                invoker_id = get_id(cursor, 'invocation_sources', 'invoker', ui_raw.get('invokedBy'))
 
-                    # Identidades
-                    identity_id = get_complex_id(
-                        cursor, 'identities',
-                        ['principal_id', 'arn', 'access_key_id'],
+                # Identidades
+                identity_id = get_complex_id(
+                    cursor, 'identities',
+                    ['principal_id', 'arn', 'access_key_id'],
+                    {
+                        'user_name': event.get('Username'),
+                        'type': ui_raw.get('type'),
+                        'principal_id': ui_raw.get('principalId'),
+                        'arn': ui_raw.get('arn'),
+                        'account_id': ui_raw.get('accountId'),
+                        'access_key_id': event.get('AccessKeyId'),
+                        'invoker_id': invoker_id
+                    }
+                )
+
+                # Emisores
+                sc = ui_raw.get('sessionContext') or {}
+                issuer = sc.get('sessionIssuer') or {}
+                issuer_id = None
+                if issuer.get('arn') or issuer.get('principalId'):
+                    issuer_id = get_complex_id(
+                        cursor, 'issuers',
+                        ['principal_id', 'arn'],
                         {
                             'user_name': event.get('Username'),
                             'type': ui_raw.get('type'),
@@ -262,102 +278,77 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                         }
                     )
 
-                    # Emisores
-                    sc = ui_raw.get('sessionContext') or {}
-                    issuer = sc.get('sessionIssuer') or {}
-                    issuer_id = None
-                    if issuer.get('arn') or issuer.get('principalId'):
-                        issuer_id = get_complex_id(
-                            cursor, 'issuers',
-                            ['principal_id', 'arn'],
-                            {
-                                'type': issuer.get('type'),
-                                'principal_id': issuer.get('principalId'),
-                                'arn': issuer.get('arn'),
-                                'user_name': issuer.get('userName'),
-                                'account_id': issuer.get('accountId')
-                            }
-                        )
+                # Insercion de Evento
+                attr = sc.get('attributes') or {}
+                params = ct.get('requestParameters') or {}
 
-                    # Insercion de Evento
-                    attr = sc.get('attributes') or {}
-                    params = ct.get('requestParameters') or {}
+                # Normalizacion de readOnly (puede venir como string "true" o boolean)
+                read_only_val = event.get('ReadOnly')
+                read_only = 1 if read_only_val in [True, "true", "True", "TRUE"] else 0
 
-                    # Normalizacion de readOnly
-                    read_only_val = event.get('ReadOnly')
-                    read_only = 1 if read_only_val in [True, "true", "True", "TRUE"] else 0
+                cursor.execute("""
+                    INSERT IGNORE INTO events
+                    (event_id, event_time, event_time_epoch, event_name_id, source_id, region_id,
+                     identity_id, issuer_id, user_agent_id, error_code_id, type_id,
+                     category_id, request_id, shared_event_id, recipient_account_id,
+                     source_ip, vpc_endpoint_id, event_version, read_only, management_event,
+                     mfa_authenticated, session_creation_date, include_all_instances,
+                     request_parameters, response_elements, additional_event_data,
+                     service_event_details, tls_details, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    event.get('EventId'), clean_time, epoch_time, name_id, source_id, region_id,
+                    identity_id, issuer_id, agent_id, error_id, type_id, cat_id,
+                    ct.get('requestID'), ct.get('sharedEventID'), ct.get('recipientAccountId'),
+                    ct.get('sourceIPAddress'), ct.get('vpcEndpointId'), ct.get('eventVersion'),
+                    read_only,
+                    1 if ct.get('managementEvent') is True else 0,
+                    1 if attr.get('mfaAuthenticated') == "true" else 0,
+                    attr.get('creationDate', '').replace('T', ' ').replace('Z', '') or None,
+                    1 if params.get('includeAllInstances') is True else 0,
+                    json.dumps(params, ensure_ascii=False),
+                    json.dumps(ct.get('responseElements'), ensure_ascii=False),
+                    json.dumps(ct.get('additionalEventData'), ensure_ascii=False),
+                    json.dumps(ct.get('serviceEventDetails'), ensure_ascii=False),
+                    json.dumps(ct.get('tlsDetails'), ensure_ascii=False),
+                    ct.get('errorMessage')
+                ))
 
-                    cursor.execute("""
-                        INSERT IGNORE INTO events
-                        (event_id, event_time, event_time_epoch, event_name_id, source_id, region_id,
-                         identity_id, issuer_id, user_agent_id, error_code_id, type_id,
-                         category_id, request_id, shared_event_id, recipient_account_id,
-                         source_ip, vpc_endpoint_id, event_version, read_only, management_event,
-                         mfa_authenticated, session_creation_date, include_all_instances,
-                         request_parameters, response_elements, additional_event_data,
-                         service_event_details, tls_details, error_message)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        event.get('EventId'), clean_time, epoch_time, name_id, source_id, region_id,
-                        identity_id, issuer_id, agent_id, error_id, type_id, cat_id,
-                        ct.get('requestID'), ct.get('sharedEventID'), ct.get('recipientAccountId'),
-                        ct.get('sourceIPAddress'), ct.get('vpcEndpointId'), ct.get('eventVersion'),
-                        read_only,
-                        1 if ct.get('managementEvent') is True else 0,
-                        1 if attr.get('mfaAuthenticated') == "true" else 0,
-                        attr.get('creationDate', '').replace('T', ' ').replace('Z', '') or None,
-                        1 if params.get('includeAllInstances') is True else 0,
-                        json.dumps(params, ensure_ascii=False),
-                        json.dumps(ct.get('responseElements'), ensure_ascii=False),
-                        json.dumps(ct.get('additionalEventData'), ensure_ascii=False),
-                        json.dumps(ct.get('serviceEventDetails'), ensure_ascii=False),
-                        json.dumps(ct.get('tlsDetails'), ensure_ascii=False),
-                        ct.get('errorMessage')
+                # Recursos (batch insert optimizado)
+                all_resources = event.get('Resources') or []
+                if 'resources' in ct:
+                    all_resources.extend(ct['resources'])
+
+                for res in all_resources:
+                    batch_insert_resources.append((
+                        event.get('EventId'), clean_time,
+                        res.get('ResourceType') or res.get('type'),
+                        res.get('ResourceName') or res.get('ARN'),
+                        res.get('accountId')
                     ))
 
-                    # Recursos
-                    all_resources = event.get('Resources') or []
-                    if 'resources' in ct:
-                        all_resources.extend(ct['resources'])
+                # Metricas
+                metrics.events_processed += 1
+                metrics.services_seen.add(event.get('EventSource', 'unknown'))
+                if ct.get('errorCode'):
+                    metrics.errors_seen.add(ct['errorCode'])
 
-                    for res in all_resources:
-                        batch_insert_resources.append((
-                            event.get('EventId'), clean_time,
-                            res.get('ResourceType') or res.get('type'),
-                            res.get('ResourceName') or res.get('ARN'),
-                            res.get('accountId')
-                        ))
+                count += 1
 
-                    metrics.events_processed += 1
-                    metrics.services_seen.add(event.get('EventSource', 'unknown'))
-                    if ct.get('errorCode'):
-                        metrics.errors_seen.add(ct['errorCode'])
+                # Flush de recursos cada 500 eventos
+                if len(batch_insert_resources) >= 500:
+                    cursor.executemany("""
+                        INSERT IGNORE INTO event_resources
+                        (event_id, event_time, resource_type, resource_name, account_id)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, batch_insert_resources)
+                    batch_insert_resources = []
 
-                    count += 1
-
-                    if len(batch_insert_resources) >= 500:
-                        cursor.executemany("""
-                            INSERT IGNORE INTO event_resources
-                            (event_id, event_time, resource_type, resource_name, account_id)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, batch_insert_resources)
-                        batch_insert_resources = []
-
-                except Exception as e:
-                    metrics.events_failed += 1
-                    logger.error(f"Error procesando evento {event.get('EventId', 'N/A')}: {e}")
-                    continue
-
-    except boto3.exceptions.botocore.exceptions.ClientError as e:
-        error_code = e.response['Error']['Code']
-        if error_code in ['ExpiredTokenException', 'UnrecognizedClientException']:
-            logger.critical(f"❌ Error de Credenciales: La sesión de AWS ha expirado o es inválida.")
-        elif error_code == 'AccessDeniedException':
-            logger.critical(f"🚫 Acceso Denegado: No tienes permisos para consultar CloudTrail.")
-        else:
-            logger.error(f"⚠️ Error de AWS API: {error_code}")
-        raise RuntimeError("Falla crítica de comunicación con AWS")
+            except Exception as e:
+                metrics.events_failed += 1
+                logger.error(f"Error procesando evento {event.get('EventId', 'N/A')}: {e}")
+                continue
 
     # Flush final de recursos
     if batch_insert_resources:
@@ -372,6 +363,8 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
         "INSERT INTO ingestion_log (ingested_date, execution_time) VALUES (%s, NOW())",
         (date_str,)
     )
+
+    return count
 
     return count
 
@@ -430,7 +423,7 @@ def main():
                 logger.info(f"Procesando {date_str}")
                 logger.info(f"{'='*50}")
 
-               	try:
+                try:
                     total = process_day(cursor, db_name, client, target_date, args.max, metrics)
                     if not args.dry_run:
                         conn.commit()
@@ -444,6 +437,7 @@ def main():
                 except Exception:
                     conn.rollback()
                     traceback.print_exc()
+
             # Resumen final
             logger.info(metrics.summary())
 
