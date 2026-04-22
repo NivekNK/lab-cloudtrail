@@ -14,6 +14,13 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
+
+
 
 # ============================================
 # CONFIGURACION DE LOGGING
@@ -26,13 +33,13 @@ logging.basicConfig(
 logger = logging.getLogger('cloudtrail_ingest')
 
 # ============================================
-# CONFIGURACION DE BASE DE DATOS
+# CONFIGURACION DE BASE DE DATOS (Desacoplada)
 # ============================================
 DB_CONFIG = {
-    'host': '127.0.0.1',
-    'user': 'nivek',
-    'password': '1234',
-    'database': 'cloudtrail_relational',
+    'host': os.getenv('DB_HOST', '127.0.0.1'),
+    'user': os.getenv('DB_USER'),
+    'password': os.getenv('DB_PASSWORD'),
+    'database': os.getenv('DB_NAME', 'cloudtrail_relational'),
     'autocommit': False,
     'buffered': True,
     'connection_timeout': 30,
@@ -193,7 +200,6 @@ def validate_event(event, ct):
         return False, "EventSource faltante"
     return True, None
 
-
 def process_day(cursor, db_name, client, target_date, max_events, metrics):
     """Procesa un dia completo de eventos CloudTrail"""
     date_str = target_date.strftime('%Y-%m-%d')
@@ -262,11 +268,13 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                         cursor, 'issuers',
                         ['principal_id', 'arn'],
                         {
-                            'type': issuer.get('type'),
-                            'principal_id': issuer.get('principalId'),
-                            'arn': issuer.get('arn'),
-                            'user_name': issuer.get('userName'),
-                            'account_id': issuer.get('accountId')
+                            'user_name': event.get('Username'),
+                            'type': ui_raw.get('type'),
+                            'principal_id': ui_raw.get('principalId'),
+                            'arn': ui_raw.get('arn'),
+                            'account_id': ui_raw.get('accountId'),
+                            'access_key_id': event.get('AccessKeyId'),
+                            'invoker_id': invoker_id
                         }
                     )
 
@@ -358,6 +366,7 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
 
     return count
 
+    return count
 
 def main():
     parser = argparse.ArgumentParser(description='CloudTrail Ingestion v2 - Curso AWS API')
@@ -373,7 +382,10 @@ def main():
     try:
         with managed_db_connection(DB_CONFIG) as (conn, cursor):
             cursor.execute(f"USE {db_name}")
-            client = boto3.client('cloudtrail')
+            client = boto3.client(
+                'cloudtrail',
+                region_name=os.getenv('AWS_REGION', 'us-east-1')
+            )
             today = datetime.now(timezone.utc).date()
             metrics = IngestionMetrics()
 
@@ -416,6 +428,12 @@ def main():
                     if not args.dry_run:
                         conn.commit()
                     logger.info(f"Exito: {total:,} eventos procesados.")
+                except RuntimeError as e:
+                    # Capturamos la falla crítica de comunicación
+                    conn.rollback()
+                    logger.critical(f"Abortando ejecución: {e}")
+                    # Salimos del bucle de días completamente
+                    break
                 except Exception:
                     conn.rollback()
                     traceback.print_exc()
