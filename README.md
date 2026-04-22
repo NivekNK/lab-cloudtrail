@@ -1014,16 +1014,16 @@ SELECT
     CASE
         WHEN HOUR(e.event_time) BETWEEN 9 AND 18 
              AND DAYOFWEEK(e.event_time) BETWEEN 2 AND 6 THEN '✓ Horario Laboral'
-        ELSE '⚠ Fuera de horario'
+        ELSE '⚠️ Fuera de horario'
     END AS evaluacion_horario,
-    e.request_parameters->>"$.instanceTypS instance_type,
+    e.request_parameters->>"$.instanceType" AS instance_type, -- Corregido typo y comillas
     e.request_parameters->>"$.bucketName" AS bucket
 FROM events e
 JOIN identities i ON e.identity_id = i.id
 JOIN event_names n ON e.event_name_id = n.id
 JOIN event_sources s ON e.source_id = s.id
 WHERE i.type IN ('IAMUser', 'AssumedRole')
-  AND e.read_only = 0  -- Solo escrituras
+  AND e.read_only = 0 
   AND (HOUR(e.event_time) NOT BETWEEN 9 AND 18
        OR DAYOFWEEK(e.event_time) IN (1, 7))
 ORDER BY e.event_time DESC
@@ -1198,7 +1198,7 @@ ORDER BY segundos_hasta_fallo;
 SELECT
     i.arn AS caller,
     COUNT(*) AS total_calls,
-    SUM(CASE WHEN erequest_parameters->>"$.NextToken" IS NOT NULL 
+    SUM(CASE WHEN e.request_parameters->>"$.NextToken" IS NOT NULL  -- Corregido e.request
               OR e.request_parameters->>"$.nextToken" IS NOT NULL
              THEN 1 ELSE 0 END) AS calls_paginadas,
     SUM(CASE WHEN e.request_parameters->>"$.MaxResults" IS NOT NULL 
@@ -1274,7 +1274,7 @@ SELECT
     s.source,
     n.name AS operacion,
     COUNT(*) AS frecuencia,
-    e.request_parametrs->>"$.QueueUrl" AS queue_url,
+    e.request_parameters->>"$.QueueUrl" AS queue_url, -- Corregido typo 'parametrs'
     e.request_parameters->>"$.TopicArn" AS topic_arn,
     e.request_parameters->>"$.Message" AS message_sample,
     inv.invoker as invoked_by
@@ -1290,8 +1290,7 @@ GROUP BY s.source, n.name,
          e.request_parameters->>"$.Message",
          inv.invoker
 ORDER BY s.source, frecuencia DESC
-LIMIT 20;
-```
+LIMIT 20;```
 
 **Hipotesis del curso:** SQS y SNS comparten infraestructura subyacente pero exponen contratos de entrega diferentes (cola vs pub/sub). CloudTrail te permite ver si las operaciones internas tienen patrones similares.
 
@@ -1449,12 +1448,7 @@ WITH cadena AS (
     FROM events e
     JOIN event_names n ON e.event_name_id = n.id
     JOIN event_sources s ON e.source_id = s.id
-    WHERE (e.request_id = 'REEMPLAZA_CON_REQUEST_ID'
-        OR e.event_time BETWEEN (
-            SELECT MIN(event_time) FROM events WHERE request_id = 'REEMPLAZA_CON_REQUEST_ID'
-        ) AND (
-            SELECT MAX(event_time) FROM events WHERE request_id = 'REEMPLAZA_CON_REQUEST_ID'
-        ))
+    WHERE e.request_id = 'TU_REQUEST_ID' -- Recuerda cambiar esto
 )
 SELECT
     source,
@@ -1463,7 +1457,7 @@ SELECT
     CASE
         WHEN latencia_ms < 10 THEN '⚡ Rapido (cached)'
         WHEN latencia_ms < 100 THEN '✓ Normal'
-        WHEN latenci < 500 THEN '⚠ Lento'
+        WHEN latencia_ms < 500 THEN '⚠️ Lento' -- Corregido typo 'latenci'
         ELSE '🔴 Muy lento o timeout'
     END AS evaluacion
 FROM cadena
@@ -1572,8 +1566,8 @@ LIMIT 5;
 SELECT
     n.name AS operation,
     COUNT(*) AS freq,
-    SUM(CASE WHEN e.read_only = 1 THEN 1 ELSE 0 END) AS reads,
-    SUM(CASE WHEN e.read_only = 0 THEN 1 ELSE 0 END) AS writes,
+    SUM(CASE WHEN e.read_only = 1 THEN 1 ELSE 0 END) AS `reads`, -- Agregado backticks
+    SUM(CASE WHEN e.read_only = 0 THEN 1 ELSE 0 END) AS `writes`, -- Agregado backticks
     COUNT(DISTINCT i.type) AS tipos_identity
 FROM events e
 JOIN event_names n ON e.event_name_id = n.id
