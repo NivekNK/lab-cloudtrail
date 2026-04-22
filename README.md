@@ -84,6 +84,12 @@ python ingest_cloudtrail.py --days 2 --force
 
 ---
 
+## 📊 Modelo Relacional
+
+![Modelo Relacional](./docs/cloudtrail_relational_model.svg)
+
+---
+
 ## ⚠️ Troubleshooting Común
 
 * **Error de Credenciales**: Si recibes un `CRITICAL | ❌ Error de Credenciales`, ejecuta `aws sso login` o actualiza tus variables en el `.env`.
