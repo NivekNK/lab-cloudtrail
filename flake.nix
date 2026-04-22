@@ -1,14 +1,12 @@
 {
-  description = "CloudTrail Ingestion con UV y Nix Multiplataforma";
+  description = "CloudTrail Ingestion - Multiplataforma (Linux/Mac)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # Herramienta útil para manejar múltiples sistemas de forma limpia
     flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    # Esta función genera automáticamente las salidas para cada sistema listado
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -24,17 +22,26 @@
           shellHook = ''
             echo "--- Entorno CloudTrail Normalizado ($system) ---"
             
-            # Crear venv si no existe
+            # 1. Gestión del VENV
             if [ ! -d ".venv" ]; then
-              echo "Creando entorno virtual con uv para $system..."
+              echo "Creando entorno virtual con uv..."
               uv venv
             fi
-            
-            # Sincronizar dependencias (uv pip install es muy rápido)
             source .venv/bin/activate
-            uv pip install boto3 mysql-connector-python
             
+            # 2. Sincronización de dependencias (Aquí integramos todo)
+            echo "Sincronizando toolkit de Python y Criptografía..."
+            uv pip install \
+              boto3 \
+              mysql-connector-python \
+              python-dotenv \
+              awscurl
+
+            echo "--------------------------------------------------"
+            echo "Sistema detectado: $system"
             echo "Listo: Usa 'python ingest_cloudtrail.py --days X'"
+            echo "Documentación disponible en AWS_HTTP_ANATOMY.md"
+            echo "--------------------------------------------------"
           '';
         };
       }
