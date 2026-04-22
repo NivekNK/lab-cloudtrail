@@ -51,9 +51,9 @@ CREATE TABLE IF NOT EXISTS identities (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_name VARCHAR(255),       -- $.Username [cite: 2, 4]
     type VARCHAR(100),            -- $.CloudTrailEvent.userIdentity.type [cite: 2, 8]
-    principal_id VARCHAR(200),    -- $.CloudTrailEvent.userIdentity.principalId [cite: 2]
-    arn VARCHAR(400),              -- $.CloudTrailEvent.userIdentity.arn [cite: 2]
-    account_id VARCHAR(100),       -- $.CloudTrailEvent.userIdentity.accountId [cite: 2, 8]
+    principal_id VARCHAR(150),    -- $.CloudTrailEvent.userIdentity.principalId [cite: 2]
+    arn VARCHAR(255),              -- $.CloudTrailEvent.userIdentity.arn [cite: 2]
+    account_id VARCHAR(50),       -- $.CloudTrailEvent.userIdentity.accountId [cite: 2, 8]
     access_key_id VARCHAR(64),     -- $.AccessKeyId / $.CloudTrailEvent.userIdentity.accessKeyId [cite: 1, 2]
     invoker_id INT,                -- FK -> invocation_sources.id [cite: 13]
     UNIQUE KEY unq_identity (principal_id, arn, access_key_id)
@@ -62,10 +62,10 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE TABLE IF NOT EXISTS issuers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     type VARCHAR(100),            -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.type [cite: 2, 4]
-    principal_id VARCHAR(200),    -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.principalId [cite: 2, 4]
-    arn VARCHAR(400),              -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.arn [cite: 2, 4]
+    principal_id VARCHAR(150),    -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.principalId [cite: 2, 4]
+    arn VARCHAR(255),              -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.arn [cite: 2, 4]
     user_name VARCHAR(255),       -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.userName [cite: 2, 4]
-    account_id VARCHAR(100),       -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.accountId [cite: 2, 4]
+    account_id VARCHAR(50),       -- $.CloudTrailEvent.userIdentity.sessionContext.sessionIssuer.accountId [cite: 2, 4]
     UNIQUE KEY unq_issuer (principal_id, arn)
 ) ENGINE=InnoDB;
 
@@ -170,7 +170,7 @@ ALTER TABLE events ADD INDEX idx_source_ip (source_ip, event_time);
 ALTER TABLE events ADD INDEX idx_write_events (read_only, source_id, event_name_id);
 
 -- 7. Indice en event_resources para busqueda por recurso
-ALTER TABLE event_resources ADD INDEX idx_resource (resource_name, event_time);
+ALTER TABLE event_resources ADD INDEX idx_resource (resource_name(191), event_time);
 
 
 -- ============================================
