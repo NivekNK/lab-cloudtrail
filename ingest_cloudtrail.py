@@ -48,16 +48,16 @@ class IngestionMetrics:
         self.events_skipped = 0
         self.services_seen = set()
         self.errors_seen = set()
-    
+
     @property
     def elapsed_seconds(self):
         return time.time() - self.start_time
-    
+
     @property
     def events_per_second(self):
         elapsed = self.elapsed_seconds
         return self.events_processed / elapsed if elapsed > 0 else 0
-    
+
     def summary(self):
         return (f"\n{'='*50}\n"
                 f"RESUMEN DE INGESTION\n"
@@ -77,28 +77,27 @@ def managed_db_connection(db_config):
     """Context manager para conexion con reintentos"""
     conn = None
     max_retries = 3
-    
-    for attempt in range(max_retries):
-        try:
-            cfg = db_config.copy()
-            db_name = cfg.pop('database')
-            conn = mysql.connector.connect(**cfg)
-            cursor = conn.cursor(buffered=True)
-            cursor.execute(f"USE {db_name}")
-            cursor.execute("SET time_zone = '+00:00'")
-            cursor.execute("SET SESSION sql_mode = 'ALLOW_INVALID_DATES'")
-            yield conn, cursor
-            break
-        except MySQLError as e:
-            logger.error(f"Intento {attempt + 1}/{max_retries} fallido: {e}")
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(2 ** attempt)
+    try:
+        for attempt in range(max_retries):
+            try:
+                cfg = db_config.copy()
+                db_name = cfg.pop('database')
+                conn = mysql.connector.connect(**cfg)
+                cursor = conn.cursor(buffered=True)
+                cursor.execute(f"USE {db_name}")
+                cursor.execute("SET time_zone = '+00:00'")
+                cursor.execute("SET SESSION sql_mode = 'ALLOW_INVALID_DATES'")
+                yield conn, cursor
+                return  # Salida exitosa del generador
+            except MySQLError as e:
+                logger.error(f"Intento {attempt + 1}/{max_retries} fallido: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
     finally:
         if conn and conn.is_connected():
             conn.close()
             logger.debug("Conexion cerrada")
-
 
 def manage_partitions(cursor, db_name, table, target_date):
     """Estrategia REORGANIZE para permitir ingestas en cualquier orden cronologico"""
@@ -106,20 +105,20 @@ def manage_partitions(cursor, db_name, table, target_date):
     next_day = target_date + timedelta(days=1)
     limit_ts = int(datetime.combine(next_day, datetime.min.time())
                    .replace(tzinfo=timezone.utc).timestamp())
-    
+
     cursor.execute(
         f"SELECT PARTITION_NAME FROM information_schema.partitions "
         f"WHERE table_name = '{table}' AND table_schema = '{db_name}' LIMIT 1"
     )
     res = cursor.fetchone()
-    
+
     if res and res[0] is None:
         logger.info(f"Inicializando particionamiento en {table}...")
         cursor.execute(
             f"ALTER TABLE {table} PARTITION BY RANGE (UNIX_TIMESTAMP(event_time)) "
             f"(PARTITION p_max VALUES LESS THAN MAXVALUE)"
         )
-    
+
     cursor.execute(
         f"SELECT COUNT(*) FROM information_schema.partitions "
         f"WHERE table_name = '{table}' AND partition_name = '{p_name}' "
@@ -152,7 +151,7 @@ def get_complex_id(cursor, table, unique_cols, data):
         f"INSERT IGNORE INTO {table} ({cols}) VALUES ({placeholders})",
         list(data.values())
     )
-    
+
     where_parts = []
     params = []
     for k in unique_cols:
@@ -162,7 +161,7 @@ def get_complex_id(cursor, table, unique_cols, data):
         else:
             where_parts.append(f"{k} = %s")
             params.append(val)
-    
+
     where_clause = " AND ".join(where_parts)
     cursor.execute(
         f"SELECT id FROM {table} WHERE {where_clause} LIMIT 1",
@@ -200,33 +199,33 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
     date_str = target_date.strftime('%Y-%m-%d')
     start_dt = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
     end_dt = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=timezone.utc)
-    
+
     manage_partitions(cursor, db_name, 'events', target_date)
     manage_partitions(cursor, db_name, 'event_resources', target_date)
-    
+
     paginator = client.get_paginator('lookup_events')
     config = {'MaxItems': max_events} if max_events else {}
-    
+
     batch_insert_resources = []
     count = 0
-    
+
     for page in paginator.paginate(StartTime=start_dt, EndTime=end_dt, PaginationConfig=config):
         for event in page['Events']:
             try:
                 ct = json.loads(event.get('CloudTrailEvent') or '{}')
-                
+
                 # Validacion
                 valid, error = validate_event(event, ct)
                 if not valid:
                     logger.debug(f"Evento invalido: {error}")
                     metrics.events_skipped += 1
                     continue
-                
+
                 # Limpieza de fechas
                 event_time_obj = event.get('EventTime')
                 clean_time = str(ct.get('eventTime') or event_time_obj).replace('T', ' ').replace('Z', '')
                 epoch_time = int(event_time_obj.timestamp()) if isinstance(event_time_obj, datetime) else None
-                
+
                 # Normalizacion de Maestros
                 name_id = get_id(cursor, 'event_names', 'name', event.get('EventName'))
                 source_id = get_id(cursor, 'event_sources', 'source', event.get('EventSource'))
@@ -235,10 +234,10 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                 error_id = get_id(cursor, 'error_codes', 'code', ct.get('errorCode'))
                 type_id = get_id(cursor, 'event_types', 'name', ct.get('eventType'))
                 cat_id = get_id(cursor, 'event_categories', 'name', ct.get('eventCategory'))
-                
+
                 ui_raw = ct.get('userIdentity') or {}
                 invoker_id = get_id(cursor, 'invocation_sources', 'invoker', ui_raw.get('invokedBy'))
-                
+
                 # Identidades
                 identity_id = get_complex_id(
                     cursor, 'identities',
@@ -253,7 +252,7 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                         'invoker_id': invoker_id
                     }
                 )
-                
+
                 # Emisores
                 sc = ui_raw.get('sessionContext') or {}
                 issuer = sc.get('sessionIssuer') or {}
@@ -270,17 +269,17 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                             'account_id': issuer.get('accountId')
                         }
                     )
-                
+
                 # Insercion de Evento
                 attr = sc.get('attributes') or {}
                 params = ct.get('requestParameters') or {}
-                
+
                 # Normalizacion de readOnly (puede venir como string "true" o boolean)
                 read_only_val = event.get('ReadOnly')
                 read_only = 1 if read_only_val in [True, "true", "True", "TRUE"] else 0
-                
+
                 cursor.execute("""
-                    INSERT IGNORE INTO events 
+                    INSERT IGNORE INTO events
                     (event_id, event_time, event_time_epoch, event_name_id, source_id, region_id,
                      identity_id, issuer_id, user_agent_id, error_code_id, type_id,
                      category_id, request_id, shared_event_id, recipient_account_id,
@@ -288,7 +287,7 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                      mfa_authenticated, session_creation_date, include_all_instances,
                      request_parameters, response_elements, additional_event_data,
                      service_event_details, tls_details, error_message)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     event.get('EventId'), clean_time, epoch_time, name_id, source_id, region_id,
@@ -307,12 +306,12 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                     json.dumps(ct.get('tlsDetails'), ensure_ascii=False),
                     ct.get('errorMessage')
                 ))
-                
+
                 # Recursos (batch insert optimizado)
                 all_resources = event.get('Resources') or []
                 if 'resources' in ct:
                     all_resources.extend(ct['resources'])
-                
+
                 for res in all_resources:
                     batch_insert_resources.append((
                         event.get('EventId'), clean_time,
@@ -320,43 +319,43 @@ def process_day(cursor, db_name, client, target_date, max_events, metrics):
                         res.get('ResourceName') or res.get('ARN'),
                         res.get('accountId')
                     ))
-                
+
                 # Metricas
                 metrics.events_processed += 1
                 metrics.services_seen.add(event.get('EventSource', 'unknown'))
                 if ct.get('errorCode'):
                     metrics.errors_seen.add(ct['errorCode'])
-                
+
                 count += 1
-                
+
                 # Flush de recursos cada 500 eventos
                 if len(batch_insert_resources) >= 500:
                     cursor.executemany("""
-                        INSERT IGNORE INTO event_resources 
+                        INSERT IGNORE INTO event_resources
                         (event_id, event_time, resource_type, resource_name, account_id)
                         VALUES (%s, %s, %s, %s, %s)
                     """, batch_insert_resources)
                     batch_insert_resources = []
-                
+
             except Exception as e:
                 metrics.events_failed += 1
                 logger.error(f"Error procesando evento {event.get('EventId', 'N/A')}: {e}")
                 continue
-    
+
     # Flush final de recursos
     if batch_insert_resources:
         cursor.executemany("""
-            INSERT IGNORE INTO event_resources 
+            INSERT IGNORE INTO event_resources
             (event_id, event_time, resource_type, resource_name, account_id)
             VALUES (%s, %s, %s, %s, %s)
         """, batch_insert_resources)
-    
+
     # Log de ingestion
     cursor.execute(
         "INSERT INTO ingestion_log (ingested_date, execution_time) VALUES (%s, NOW())",
         (date_str,)
     )
-    
+
     return count
 
 
@@ -367,21 +366,21 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Simular sin escribir')
     parser.add_argument('--force', action='store_true', help='Reprocesar sin preguntar')
     args = parser.parse_args()
-    
+
     cfg = DB_CONFIG.copy()
     db_name = cfg.pop('database')
-    
+
     try:
         with managed_db_connection(DB_CONFIG) as (conn, cursor):
             cursor.execute(f"USE {db_name}")
             client = boto3.client('cloudtrail')
             today = datetime.now(timezone.utc).date()
             metrics = IngestionMetrics()
-            
+
             for i in range(args.days, -1, -1):
                 target_date = today - timedelta(days=i)
                 date_str = target_date.strftime('%Y-%m-%d')
-                
+
                 # Verificar si ya fue ingestado
                 cursor.execute(
                     "SELECT 1 FROM ingestion_log WHERE ingested_date = %s",
@@ -390,7 +389,7 @@ def main():
                 if cursor.fetchone() and not args.force:
                     logger.warning(f"{date_str} ya existe. Usa --force para reprocesar.")
                     continue
-                
+
                 if args.force:
                     p_name = f"p{date_str.replace('-', '')}"
                     try:
@@ -407,11 +406,11 @@ def main():
                             (date_str,)
                         )
                         conn.commit()
-                
+
                 logger.info(f"{'='*50}")
                 logger.info(f"Procesando {date_str}")
                 logger.info(f"{'='*50}")
-                
+
                 try:
                     total = process_day(cursor, db_name, client, target_date, args.max, metrics)
                     if not args.dry_run:
@@ -420,17 +419,17 @@ def main():
                 except Exception:
                     conn.rollback()
                     traceback.print_exc()
-            
+
             # Resumen final
             logger.info(metrics.summary())
-            
+
             # Estadisticas adicionales
             cursor.execute("SELECT COUNT(*) FROM events")
             total_db = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(DISTINCT source_id) FROM events")
             total_services = cursor.fetchone()[0]
             logger.info(f"Total en base de datos: {total_db:,} eventos de {total_services} servicios")
-    
+
     except KeyboardInterrupt:
         logger.warning("Interrupcion manual detectada.")
     except Exception:
